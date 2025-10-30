@@ -1,4 +1,4 @@
-# ForexSage 💱🤖
+# ForexSage
 
 > **Intelligent Currency Exchange Rate Analysis Agent with Real-Time Rates, Historical Trends, and AI-Powered Projections**
 
