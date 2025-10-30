@@ -2,10 +2,10 @@
 import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
-import { completeForexAnalysisWorkflow, } from './ai-workflows/complete-forex-analysis-workflow';
-import { multiCurrencyComparisonWorkflow } from './ai-workflows/multi-currency-comparison-workflow';
-import { dailyForexReportWorkflow } from './ai-workflows/daily-forex-report-workflow';
-import { arbitrageOpportunityWorkflow } from './ai-workflows/arbitrage-opportunity-workflow';
+import { completeForexAnalysisWorkflow, } from './workflows/complete-forex-analysis-workflow';
+import { multiCurrencyComparisonWorkflow } from './workflows/multi-currency-comparison-workflow';
+import { dailyForexReportWorkflow } from './workflows/daily-forex-report-workflow';
+import { arbitrageOpportunityWorkflow } from './workflows/arbitrage-opportunity-workflow';
 import { forexSageAgent } from './agents/forex-sage-agent';
 import { forexSageA2ARoute } from './api/routes/forexsage-a2a-route';
 import { completeForexAnalysisA2ARoute } from './api/routes/complete-forex-analysis-a2a-route';
