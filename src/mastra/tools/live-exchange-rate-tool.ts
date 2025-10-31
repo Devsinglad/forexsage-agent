@@ -13,8 +13,22 @@ export const liveExchangeRateTool = createTool({
     execute: async ({ context }) => {
         const { source, currencies } = context;
 
+        // Handle case where currencies might be passed as a string instead of array
+        let processedCurrencies: string[];
+        if (typeof currencies === 'string') {
+            try {
+                // Try to parse if it's a JSON string
+                processedCurrencies = JSON.parse(currencies);
+            } catch {
+                // If parsing fails, treat it as a single currency
+                processedCurrencies = [currencies];
+            }
+        } else {
+            processedCurrencies = currencies;
+        }
+
         try {
-            const currencyList = currencies.join(',');
+            const currencyList = processedCurrencies.join(',');
             const apiKey = config.currencyKey;
 
             const response = await fetch(
