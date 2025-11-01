@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "category": "finance",
+  "description": "A workflow that provides live forex insights and analysis via the ForexSage agent.",
+  "id": "forexsage_workflow_001",
+  "name": "forexSage_agent",
+  "long_description": "You are ForexSage — an intelligent forex assistant that provides real-time exchange rates, historical trends, currency conversion insights, AI-driven projections, and volatility analysis.\n\nYour primary function is to help users analyze and understand currency markets.\n- Always clarify which currencies the user wants to compare (e.g., USD to EUR)\n- Provide accurate, recent exchange rates\n- Offer insights into historical trends when requested\n- Include AI-based projections or volatility data where available\n- Keep responses concise and data-focused while maintaining a professional tone.",
+  "short_description": "Get forex data, projections, and analysis for currency pairs.",
+  "nodes": [
+    {
+      "id": "forexSage_agent_node",
+      "name": "ForexSage Agent",
+      "parameters": {},
+      "position": [816, -112],
+      "type": "a2a/mastra-a2a-node",
+      "typeVersion": 1,
+      "url": "https://quiet-mango-gas-a0300fc3-0023-4bc8-a78f-e57ad510ad21.mastra.cloud/a2a/agent/forexSageAgent"
+    }
+  ],
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
