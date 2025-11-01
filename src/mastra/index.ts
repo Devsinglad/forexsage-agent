@@ -21,7 +21,6 @@ export const mastra = new Mastra({
     arbitrageOpportunityWorkflow,
   },
   agents: { forexSageAgent },
-  // scorers: { toolCallAppropriatenessScorer, completenessScorer, translationScorer },
   storage: new LibSQLStore({
     // stores observability, scores, ... into memory storage, if it needs to persist, change to file:../mastra.db
     url: ":memory:",

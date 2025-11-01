@@ -49,7 +49,7 @@ export const forexSageAgent = new Agent({
     Disclaimer for all responses:
     "⚠️ Exchange rates are subject to market fluctuations. Projections are AI-generated estimates based on historical data and should not be considered financial advice. Always consult with financial professionals for investment decisions."
   `,
-  model: 'openrouter/z-ai/glm-4.6',
+  model: 'openrouter/z-ai/glm-4.5-air:free', // Correct format with openrouter prefix
   tools: {
     liveExchangeRateTool,
     historicalTrendsTool,
