@@ -7,3 +7,4 @@ dist
 *.db
 *.db-*
 workflow-*.json
+src/mastra/workflow-forexsage.json
