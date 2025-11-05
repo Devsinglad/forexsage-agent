@@ -7,7 +7,7 @@ import { multiCurrencyComparisonWorkflow } from './workflows/multi-currency-comp
 import { dailyForexReportWorkflow } from './workflows/daily-forex-report-workflow';
 import { arbitrageOpportunityWorkflow } from './workflows/arbitrage-opportunity-workflow';
 import { forexSageAgent } from './agents/forex-sage-agent';
-import { ForexSagea2aAgentRoute } from './api/routes/forexsage-a2a-route';
+import { a2aAgentRoute } from './api/routes/forexsage-a2a-route';
 import { completeForexAnalysisA2ARoute } from './api/routes/complete-forex-analysis-a2a-route';
 import { multiCurrencyComparisonA2ARoute } from './api/routes/multi-currency-comparison-a2a-route';
 import { dailyForexReportA2ARoute } from './api/routes/daily-forex-report-a2a-route';
@@ -39,7 +39,7 @@ export const mastra = new Mastra({
       swaggerUI: true,
     },
     apiRoutes: [
-      ForexSagea2aAgentRoute,
+      a2aAgentRoute,
       completeForexAnalysisA2ARoute,
       multiCurrencyComparisonA2ARoute,
       dailyForexReportA2ARoute,
