@@ -92,7 +92,8 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
       // ===== ASYNC WEBHOOK PATTERN (NON-BLOCKING) =====
       // This prevents timeout errors for long-running agent tasks
       if (!isBlocking && webhookConfig) {
-        // Step 1: Immediately return "in-progress" state (< 1 second response)
+        // Step 1: Immediately return "submitted" state (< 1 second response)
+        // This matches the format from your mentor's example
         const immediateResponse = {
           jsonrpc: "2.0",
           id: requestId,
@@ -100,10 +101,18 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
             id: finalTaskId,
             contextId: finalContextId,
             status: {
-              state: "in-progress", // or "working" - tells client to wait for webhook
+              state: "submitted", // Using "submitted" as per mentor's example
               timestamp: new Date().toISOString(),
             },
+            history: messagesList.map((msg) => ({
+              role: msg.role,
+              parts: msg.parts,
+              messageId: msg.messageId || randomUUID(),
+              taskId: finalTaskId,
+              contextId: finalContextId,
+            })),
             kind: "task",
+            metadata: metadata || {},
           },
         };
 
@@ -116,7 +125,8 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           finalTaskId,
           finalContextId,
           webhookConfig,
-          agentId
+          agentId,
+          metadata
         ).catch((error) => {
           console.error("Error processing agent asynchronously:", error);
         });
@@ -152,22 +162,25 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         });
       }
 
+      // Create the agent's response message
+      const agentMessage = {
+        role: "agent",
+        parts: [{ kind: "text", text: agentText }],
+        messageId: randomUUID(),
+        taskId: finalTaskId,
+        contextId: finalContextId,
+      };
+
       // Build conversation history including the agent's response
       const history = [
         ...messagesList.map((msg) => ({
-          kind: "message",
           role: msg.role,
           parts: msg.parts,
           messageId: msg.messageId || randomUUID(),
-          taskId: msg.taskId || finalTaskId,
-        })),
-        {
-          kind: "message",
-          role: "agent",
-          parts: [{ kind: "text", text: agentText }],
-          messageId: randomUUID(),
           taskId: finalTaskId,
-        },
+          contextId: finalContextId,
+        })),
+        agentMessage,
       ];
 
       // Return completed response immediately (blocking mode)
@@ -180,16 +193,12 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           status: {
             state: "completed",
             timestamp: new Date().toISOString(),
-            message: {
-              messageId: randomUUID(),
-              role: "agent",
-              parts: [{ kind: "text", text: agentText }],
-              kind: "message",
-            },
+            message: agentMessage,
           },
           artifacts,
           history,
           kind: "task",
+          metadata: metadata || {},
         },
       });
     } catch (error: any) {
@@ -213,7 +222,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
 /**
  * Process agent asynchronously and send results via webhook
  * 
- * This function runs in the background after returning "in-progress" to the client.
+ * This function runs in the background after returning "submitted" state to the client.
  * When the agent completes (or fails), it sends the result to the webhook URL.
  * 
  * @param agent - The Mastra agent instance
@@ -223,6 +232,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
  * @param contextId - Conversation context identifier
  * @param webhookConfig - Webhook URL and authentication config
  * @param agentId - Agent identifier for artifacts
+ * @param metadata - Optional metadata from original request
  */
 async function processAgentAsync(
   agent: any,
@@ -231,7 +241,8 @@ async function processAgentAsync(
   taskId: string,
   contextId: string,
   webhookConfig: any,
-  agentId: string
+  agentId: string,
+  metadata?: any
 ) {
   try {
     // Execute the agent (this may take a long time)
@@ -259,44 +270,44 @@ async function processAgentAsync(
       });
     }
 
-    // Build complete conversation history
+    // Create the agent's response message
+    const agentMessage = {
+      role: "agent",
+      parts: [{ kind: "text", text: agentText }],
+      messageId: randomUUID(),
+      taskId: taskId,
+      contextId: contextId,
+    };
+
+    // Build complete conversation history (user messages + agent response)
     const history = [
       ...messagesList.map((msg) => ({
-        kind: "message",
         role: msg.role,
         parts: msg.parts,
         messageId: msg.messageId || randomUUID(),
-        taskId: msg.taskId || taskId,
-      })),
-      {
-        kind: "message",
-        role: "agent",
-        parts: [{ kind: "text", text: agentText }],
-        messageId: randomUUID(),
         taskId: taskId,
-      },
+        contextId: contextId,
+      })),
+      agentMessage,
     ];
 
-    // Prepare webhook payload with completed task
+    // ===== WEBHOOK RESPONSE PAYLOAD =====
+    // This matches the format Telex expects for task updates
     const webhookPayload = {
       jsonrpc: "2.0",
-      method: "task/update", // Notify client of task update
-      params: {
+      id: 1, // Simple ID for the webhook response
+      result: {
         id: taskId,
         contextId: contextId,
         status: {
           state: "completed", // Task finished successfully
           timestamp: new Date().toISOString(),
-          message: {
-            messageId: randomUUID(),
-            role: "agent",
-            parts: [{ kind: "text", text: agentText }],
-            kind: "message",
-          },
+          message: agentMessage, // Include the agent's message in status
         },
-        artifacts,
-        history,
+        artifacts, // Include all artifacts
+        history, // Full conversation history
         kind: "task",
+        metadata: metadata || {},
       },
     };
 
@@ -311,6 +322,8 @@ async function processAgentAsync(
       headers["Authorization"] = `Bearer ${webhookConfig.token}`;
     }
 
+    console.log("Sending webhook to:", webhookConfig.url);
+
     // Send the completed result to Telex via webhook
     const webhookResponse = await fetch(webhookConfig.url, {
       method: "POST",
@@ -318,11 +331,15 @@ async function processAgentAsync(
       body: JSON.stringify(webhookPayload),
     });
 
-    // Log webhook delivery failures
+    // Log webhook delivery status
     if (!webhookResponse.ok) {
+      const errorText = await webhookResponse.text();
       console.error(
-        `Webhook delivery failed: ${webhookResponse.status} ${webhookResponse.statusText}`
+        `Webhook delivery failed: ${webhookResponse.status} ${webhookResponse.statusText}`,
+        errorText
       );
+    } else {
+      console.log("Webhook delivered successfully");
     }
   } catch (error) {
     console.error("Error in async agent processing:", error);
@@ -331,8 +348,8 @@ async function processAgentAsync(
     try {
       const errorPayload = {
         jsonrpc: "2.0",
-        method: "task/update",
-        params: {
+        id: 1,
+        result: {
           id: taskId,
           contextId: contextId,
           status: {
@@ -344,7 +361,15 @@ async function processAgentAsync(
               data: { details: (error as Error).message },
             },
           },
+          history: messagesList.map((msg) => ({
+            role: msg.role,
+            parts: msg.parts,
+            messageId: msg.messageId || randomUUID(),
+            taskId: taskId,
+            contextId: contextId,
+          })),
           kind: "task",
+          metadata: metadata || {},
         },
       };
 
@@ -356,6 +381,8 @@ async function processAgentAsync(
       if (webhookConfig.token && webhookConfig.authentication?.schemes?.includes("Bearer")) {
         headers["Authorization"] = `Bearer ${webhookConfig.token}`;
       }
+
+      console.log("Sending error webhook to:", webhookConfig.url);
 
       // Send error notification to webhook
       await fetch(webhookConfig.url, {
