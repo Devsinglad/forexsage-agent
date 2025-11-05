@@ -6,16 +6,24 @@ import { historicalTrendsTool } from '../tools/historical-trends-tool';
 import { historicalRateTool } from '../tools/historical-rate-tool';
 import { currencyConverterTool } from '../tools/currency-converter-tool';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { config } from '../config/settings';
 
+// Helper function to simulate network delay
+const timeout = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const zhipuai = createOpenAICompatible({
   name: 'zhipuai',
-  apiKey: process.env.ZHIPU_API_KEY || '',
-  baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+  apiKey: config.zhipuApiKEY || '',
+  baseURL: config.zhipuaiBaseUrl || 'https://api.z.ai/api/paas/v4',
+  fetch: async (url, options) => {
+    await timeout(30000); // simulate network delay
+    const response = await fetch(url, options);
+    return response;
+  }
 });
 export const forexSageAgent = new Agent({
   name: 'ForexSage',
- instructions: `
+  instructions: `
     You are ForexSage, an intelligent currency exchange rate analysis agent specializing in forex market insights.
     
     Your capabilities:
@@ -94,6 +102,7 @@ export const forexSageAgent = new Agent({
     historicalRateTool,
     currencyConverterTool,
   },
+
   memory: new Memory({
     storage: new LibSQLStore({
       url: 'file:../mastra.db', // path is relative to the .mastra/output directory

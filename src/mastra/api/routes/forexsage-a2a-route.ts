@@ -24,6 +24,18 @@ export const forexSageA2ARoute = registerApiRoute('/a2a/agent/forexSageAgent', {
         }, 400);
       }
       
+      // Validate method
+      if (!method || (method !== 'chat' && method !== 'message/send')) {
+        return c.json({
+          jsonrpc: '2.0',
+          id: requestId,
+          error: {
+            code: -32601,
+            message: `Method not found: ${method}. Supported methods: "chat", "message/send"`
+          }
+        }, 400);
+      }
+      
       // Get ForexSage agent
       const agent = mastra.getAgent('forexSageAgent');
       if (!agent) {
@@ -37,14 +49,70 @@ export const forexSageA2ARoute = registerApiRoute('/a2a/agent/forexSageAgent', {
         }, 404);
       }
       
-      // Extract messages from params
-      const { message, messages, contextId, taskId, metadata } = params || {};
-      
+      // Extract messages based on method
       let messagesList = [];
-      if (message) {
-        messagesList = [message];
-      } else if (messages && Array.isArray(messages)) {
-        messagesList = messages;
+      let contextId, taskId, metadata, configuration;
+      
+      if (method === 'message/send') {
+        // Telex format: params.message with nested data array
+        const { message: telexMessage, configuration: config } = params || {};
+        configuration = config;
+        
+        if (!telexMessage) {
+          return c.json({
+            jsonrpc: '2.0',
+            id: requestId,
+            error: {
+              code: -32602,
+              message: 'Invalid params: message is required for message/send'
+            }
+          }, 400);
+        }
+        
+        // Extract the actual user text from parts
+        let userText = '';
+        if (telexMessage.parts && Array.isArray(telexMessage.parts)) {
+          for (const part of telexMessage.parts) {
+            if (part.kind === 'text') {
+              userText = part.text;
+            } else if (part.kind === 'data' && Array.isArray(part.data)) {
+              // Get the last user message from conversation history
+              const dataTexts = part.data
+                .filter((item: any) => item.kind === 'text')
+                .map((item: any) => item.text);
+              
+              // Find the actual query (usually the last non-empty text)
+              const lastText = dataTexts[dataTexts.length - 1];
+              if (lastText && lastText.trim()) {
+                userText = lastText;
+              }
+            }
+          }
+        }
+        
+        messagesList = [{
+          role: telexMessage.role || 'user',
+          parts: [{ kind: 'text', text: userText }],
+          messageId: telexMessage.messageId || randomUUID()
+        }];
+        
+        contextId = telexMessage.metadata?.telex_channel_id || randomUUID();
+        taskId = telexMessage.messageId || randomUUID();
+        metadata = telexMessage.metadata || {};
+        
+      } else {
+        // Standard chat format
+        const { message, messages, contextId: ctxId, taskId: tId, metadata: meta } = params || {};
+        
+        if (message) {
+          messagesList = [message];
+        } else if (messages && Array.isArray(messages)) {
+          messagesList = messages;
+        }
+        
+        contextId = ctxId;
+        taskId = tId;
+        metadata = meta;
       }
       
       if (messagesList.length === 0) {
@@ -53,7 +121,7 @@ export const forexSageA2ARoute = registerApiRoute('/a2a/agent/forexSageAgent', {
           id: requestId,
           error: {
             code: -32602,
-            message: 'Invalid params: message or messages array is required'
+            message: 'Invalid params: could not extract valid message'
           }
         }, 400);
       }
@@ -67,6 +135,12 @@ export const forexSageA2ARoute = registerApiRoute('/a2a/agent/forexSageAgent', {
           return '';
         }).join('\n') || ''
       }));
+      
+      console.log('Processing ForexSage request:', {
+        method,
+        messageCount: mastraMessages.length,
+        firstMessage: mastraMessages[0]?.content?.substring(0, 100)
+      });
       
       // Execute ForexSage agent
       const response = await agent.stream(mastraMessages);
@@ -116,13 +190,16 @@ export const forexSageA2ARoute = registerApiRoute('/a2a/agent/forexSageAgent', {
         }
       ];
       
+      const finalTaskId = taskId || randomUUID();
+      const finalContextId = contextId || randomUUID();
+      
       // Return A2A-compliant response
       return c.json({
         jsonrpc: '2.0',
         id: requestId,
         result: {
-          id: taskId || randomUUID(),
-          contextId: contextId || randomUUID(),
+          id: finalTaskId,
+          contextId: finalContextId,
           status: {
             state: 'completed',
             timestamp: new Date().toISOString(),
