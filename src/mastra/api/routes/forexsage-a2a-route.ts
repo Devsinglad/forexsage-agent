@@ -71,19 +71,32 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         messagesList = messages;
       }
 
-      // Convert A2A message format to Mastra's expected format
-      // A2A uses "parts" array, Mastra uses simple "content" string
-      const mastraMessages = messagesList.map((msg) => ({
-        role: msg.role,
-        content:
-          msg.parts
-            ?.map((part: { kind: string; text: string; data: object }) => {
-              if (part.kind === "text") return part.text;
-              if (part.kind === "data") return JSON.stringify(part.data);
-              return "";
-            })
-            .join("\n") || "",
-      }));
+      // Extract ONLY the current user message (ignore conversation history in data array)
+      // The latest message text is the FIRST text part, the rest in 'data' is history
+      const currentMessage = messagesList[0];
+      const currentMessageText = currentMessage.parts
+        ?.find((part: any) => part.kind === "text")?.text || "";
+
+      // Build conversation context from the data array for agent processing
+      // This gives the agent context but we don't return it in the response
+      let conversationContext = "";
+      const dataPart = currentMessage.parts?.find((part: any) => part.kind === "data");
+      if (dataPart?.data && Array.isArray(dataPart.data)) {
+        conversationContext = dataPart.data
+          .filter((item: any) => item.kind === "text")
+          .map((item: any) => item.text)
+          .join("\n");
+      }
+
+      // Convert to Mastra format - include context for better responses
+      const mastraMessages: any[] = [
+        {
+          role: "user",
+          content: conversationContext
+            ? `Previous conversation:\n${conversationContext}\n\nCurrent question: ${currentMessageText}`
+            : currentMessageText,
+        },
+      ];
 
       // Generate unique IDs for task tracking
       const finalTaskId = taskId || randomUUID();
@@ -93,7 +106,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
       // This prevents timeout errors for long-running agent tasks
       if (!isBlocking && webhookConfig) {
         // Step 1: Immediately return "submitted" state (< 1 second response)
-        // This matches the format from your mentor's example
+        // Return only the current user message, not the entire history
         const immediateResponse = {
           jsonrpc: "2.0",
           id: requestId,
@@ -101,16 +114,23 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
             id: finalTaskId,
             contextId: finalContextId,
             status: {
-              state: "submitted", // Using "submitted" as per mentor's example
+              state: "submitted",
               timestamp: new Date().toISOString(),
             },
-            history: messagesList.map((msg) => ({
-              role: msg.role,
-              parts: msg.parts,
-              messageId: msg.messageId || randomUUID(),
-              taskId: finalTaskId,
-              contextId: finalContextId,
-            })),
+            history: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    kind: "text",
+                    text: currentMessageText, // ONLY the current question
+                  },
+                ],
+                messageId: currentMessage.messageId || randomUUID(),
+                taskId: finalTaskId,
+                contextId: finalContextId,
+              },
+            ],
             kind: "task",
             metadata: metadata || {},
           },
@@ -121,7 +141,8 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         processAgentAsync(
           agent,
           mastraMessages,
-          messagesList,
+          currentMessageText,
+          currentMessage.messageId,
           finalTaskId,
           finalContextId,
           webhookConfig,
@@ -171,15 +192,20 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         contextId: finalContextId,
       };
 
-      // Build conversation history including the agent's response
+      // Build conversation history - ONLY current user message + agent response
       const history = [
-        ...messagesList.map((msg) => ({
-          role: msg.role,
-          parts: msg.parts,
-          messageId: msg.messageId || randomUUID(),
+        {
+          role: "user",
+          parts: [
+            {
+              kind: "text",
+              text: currentMessageText,
+            },
+          ],
+          messageId: currentMessage.messageId || randomUUID(),
           taskId: finalTaskId,
           contextId: finalContextId,
-        })),
+        },
         agentMessage,
       ];
 
@@ -226,8 +252,9 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
  * When the agent completes (or fails), it sends the result to the webhook URL.
  * 
  * @param agent - The Mastra agent instance
- * @param mastraMessages - Messages in Mastra format
- * @param messagesList - Original A2A messages for history
+ * @param mastraMessages - Messages in Mastra format (with context)
+ * @param currentMessageText - Only the current user question (not history)
+ * @param originalMessageId - Message ID from the original request
  * @param taskId - Unique task identifier
  * @param contextId - Conversation context identifier
  * @param webhookConfig - Webhook URL and authentication config
@@ -237,7 +264,8 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
 async function processAgentAsync(
   agent: any,
   mastraMessages: any[],
-  messagesList: any[],
+  currentMessageText: string,
+  originalMessageId: string,
   taskId: string,
   contextId: string,
   webhookConfig: any,
@@ -279,15 +307,21 @@ async function processAgentAsync(
       contextId: contextId,
     };
 
-    // Build complete conversation history (user messages + agent response)
+    // Build history - ONLY the current user message + agent response
+    // Do NOT include all previous conversation history
     const history = [
-      ...messagesList.map((msg) => ({
-        role: msg.role,
-        parts: msg.parts,
-        messageId: msg.messageId || randomUUID(),
+      {
+        role: "user",
+        parts: [
+          {
+            kind: "text",
+            text: currentMessageText, // ONLY "whats the rate of usd to naira today"
+          },
+        ],
+        messageId: originalMessageId,
         taskId: taskId,
         contextId: contextId,
-      })),
+      },
       agentMessage,
     ];
 
@@ -305,7 +339,7 @@ async function processAgentAsync(
           message: agentMessage, // Include the agent's message in status
         },
         artifacts, // Include all artifacts
-        history, // Full conversation history
+        history, // ONLY current Q&A pair, not full conversation
         kind: "task",
         metadata: metadata || {},
       },
@@ -323,6 +357,7 @@ async function processAgentAsync(
     }
 
     console.log("Sending webhook to:", webhookConfig.url);
+    console.log("Webhook payload:", JSON.stringify(webhookPayload, null, 2));
 
     // Send the completed result to Telex via webhook
     const webhookResponse = await fetch(webhookConfig.url, {
@@ -361,13 +396,20 @@ async function processAgentAsync(
               data: { details: (error as Error).message },
             },
           },
-          history: messagesList.map((msg) => ({
-            role: msg.role,
-            parts: msg.parts,
-            messageId: msg.messageId || randomUUID(),
-            taskId: taskId,
-            contextId: contextId,
-          })),
+          history: [
+            {
+              role: "user",
+              parts: [
+                {
+                  kind: "text",
+                  text: currentMessageText,
+                },
+              ],
+              messageId: originalMessageId,
+              taskId: taskId,
+              contextId: contextId,
+            },
+          ],
           kind: "task",
           metadata: metadata || {},
         },
