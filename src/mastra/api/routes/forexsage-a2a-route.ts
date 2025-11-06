@@ -1,22 +1,49 @@
 import { registerApiRoute } from "@mastra/core/server";
 import { randomUUID } from "crypto";
-import { TaskWorker } from "../../workers/task-worker";
-import { WebhookService } from "../../services/webhook-service";
+
+// Webhook notification function
+async function sendWebhookNotification(
+  webhookUrl: string,
+  result: any,
+  token?: string,
+  authSchemes?: string[]
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  console.log("Sending webhook notification to:", webhookUrl);
+  console.log("Notification payload:", JSON.stringify(result, null, 2));
+
+  // Add authentication if provided
+  if (token && authSchemes?.includes("Bearer")) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(result),
+    });
+
+    if (!response.ok) {
+      console.error(`Webhook notification failed: ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error("Error sending webhook notification:", error);
+  }
+}
 
 export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
   method: "POST",
   handler: async (c) => {
-    let requestId: string | undefined;
     try {
       const mastra = c.get("mastra");
-      const agentId = c.req.param("agentId") as 'forexSageAgent';
-      const webhookService = WebhookService.getInstance();
-      const taskWorker = TaskWorker.getInstance();
+      const agentId = c.req.param("agentId");
 
       // Parse JSON-RPC 2.0 request
       const body = await c.req.json();
-      requestId = body.id;
-      const { jsonrpc, method, params } = body;
+      const { jsonrpc, id: requestId, method, params } = body;
 
       // Validate JSON-RPC 2.0 format
       if (jsonrpc !== "2.0" || !requestId) {
@@ -49,8 +76,18 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         );
       }
 
-      // Extract messages and configuration from params
-      const { message, messages, contextId, taskId, metadata, configuration } = params || {};
+      // Extract configuration
+      const {
+        message,
+        messages,
+        contextId,
+        taskId,
+        metadata,
+        configuration
+      } = params || {};
+
+      const webhookConfig = configuration?.pushNotificationConfig;
+      const isBlocking = configuration?.blocking !== false; // default to true if not specified
 
       let messagesList = [];
       if (message) {
@@ -59,66 +96,24 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         messagesList = messages;
       }
 
-      // Check if webhook configuration is provided
-      const webhookConfig = configuration?.pushNotificationConfig;
-      const isBlocking = configuration?.blocking !== false; // Default to true
-      const timeoutMs = 55000; // 55 seconds to stay under 60-second limit
+      // Convert A2A messages to Mastra format
+      const mastraMessages = messagesList.map((msg) => ({
+        role: msg.role,
+        content:
+          msg.parts
+            ?.map((part: { kind: string; text: string; data: object }) => {
+              if (part.kind === "text") return part.text;
+              if (part.kind === "data") return JSON.stringify(part.data);
+              return "";
+            })
+            .join("\n") || "",
+      }));
 
-      if (webhookConfig && !isBlocking) {
-        // Non-blocking request with webhook - process in background
-        const taskIdForBackground = taskId || randomUUID();
-        
-        taskWorker.addTask({
-          agentId,
-          messages: messagesList,
-          contextId,
-          taskId: taskIdForBackground,
-          webhookConfig,
-          metadata,
-        });
+      const generatedTaskId = taskId || randomUUID();
+      const generatedContextId = contextId || randomUUID();
 
-        // Return immediate response indicating processing has started
-        return c.json({
-          jsonrpc: "2.0",
-          id: requestId,
-          result: {
-            id: taskIdForBackground,
-            contextId: contextId || randomUUID(),
-            status: {
-              state: "processing",
-              timestamp: new Date().toISOString(),
-              message: {
-                messageId: randomUUID(),
-                role: "agent",
-                parts: [{ kind: "text", text: "Your request is being processed. You will receive the response via webhook." }],
-                kind: "message",
-              },
-            },
-            kind: "task",
-          },
-        });
-      }
-
-      // Blocking request or no webhook - process synchronously with timeout
-      const executeWithTimeout = async () => {
-        // Convert A2A messages to Mastra format
-        const mastraMessages = messagesList.map((msg) => ({
-          role: msg.role,
-          content:
-            msg.parts
-              ?.map((part: { kind: string; text: string; data: object }) => {
-                if (part.kind === "text") return part.text;
-                if (part.kind === "data") return JSON.stringify(part.data);
-                return "";
-              })
-              .join("\n") || "",
-        }));
-
-        // Execute agent
-        const response = await agent.generate(mastraMessages);
-        const agentText = response.text || "";
-
-        // Build artifacts array
+      // Function to build the final result
+      const buildResult = (agentText: string, toolResults?: any[]) => {
         const artifacts: any = [
           {
             artifactId: randomUUID(),
@@ -127,142 +122,136 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           },
         ];
 
-        // Add tool results as artifacts
-        if (response.toolResults && response.toolResults.length > 0) {
+        if (toolResults && toolResults.length > 0) {
           artifacts.push({
             artifactId: randomUUID(),
             name: "ToolResults",
-            parts: response.toolResults.map((result: any) => ({
+            parts: toolResults.map((result) => ({
               kind: "data",
               data: result,
             })),
           });
         }
 
-        // Build conversation history
         const history = [
           ...messagesList.map((msg) => ({
             kind: "message",
             role: msg.role,
             parts: msg.parts,
             messageId: msg.messageId || randomUUID(),
-            taskId: msg.taskId || taskId || randomUUID(),
+            taskId: msg.taskId || generatedTaskId,
           })),
           {
             kind: "message",
             role: "agent",
             parts: [{ kind: "text", text: agentText }],
             messageId: randomUUID(),
-            taskId: taskId || randomUUID(),
+            taskId: generatedTaskId,
           },
         ];
 
         return {
-          id: taskId || randomUUID(),
-          contextId: contextId || randomUUID(),
-          status: {
-            state: "completed" as const,
-            timestamp: new Date().toISOString(),
-            message: {
-              messageId: randomUUID(),
-              role: "agent",
-              parts: [{ kind: "text", text: agentText }],
-              kind: "message",
+          jsonrpc: "2.0",
+          id: requestId,
+          result: {
+            id: generatedTaskId,
+            contextId: generatedContextId,
+            status: {
+              state: "completed",
+              timestamp: new Date().toISOString(),
+              message: {
+                messageId: randomUUID(),
+                role: "agent",
+                parts: [{ kind: "text", text: agentText }],
+                kind: "message",
+              },
             },
+            artifacts,
+            history,
+            kind: "task",
           },
-          artifacts,
-          history,
-          kind: "task" as const,
         };
       };
 
-      try {
-        const result = await Promise.race([
-          executeWithTimeout(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Request timeout')), timeoutMs)
-          )
-        ]);
-
-        // If webhook is configured and blocking, also send webhook
-        if (webhookConfig && isBlocking) {
-          const webhookPayload = {
-            jsonrpc: "2.0",
-            id: requestId,
-            result: result as any,
-          };
-          
-          // Send webhook asynchronously without waiting
-          webhookService.sendWebhook(webhookConfig, webhookPayload).catch(error => {
-            console.error('Failed to send webhook:', error);
-          });
-        }
-
-        return c.json({
+      // Non-blocking mode: return immediately and process in background
+      if (!isBlocking && webhookConfig?.url) {
+        // Return immediate "processing" response
+        const immediateResponse = {
           jsonrpc: "2.0",
           id: requestId,
-          result,
-        });
-      } catch (error: any) {
-        // Handle timeout
-        if (error.message === 'Request timeout') {
-          if (webhookConfig) {
-            // Fallback to webhook processing
-            const taskIdForBackground = taskId || randomUUID();
-            
-            taskWorker.addTask({
-              agentId,
-              messages: messagesList,
-              contextId,
-              taskId: taskIdForBackground,
-              webhookConfig,
-              metadata,
-            });
+          result: {
+            id: generatedTaskId,
+            contextId: generatedContextId,
+            status: {
+              state: "working",
+              timestamp: new Date().toISOString(),
+            },
+            kind: "task",
+          },
+        };
 
-            return c.json({
+        // Process agent in background
+        (async () => {
+          try {
+            const response = await agent.generate(mastraMessages);
+            const agentText = response.text || "";
+
+            const finalResult = buildResult(agentText, response.toolResults);
+
+            // Send webhook notification
+            await sendWebhookNotification(
+              webhookConfig.url,
+              finalResult,
+              webhookConfig.token,
+              webhookConfig.authentication?.schemes
+            );
+          } catch (error: any) {
+            // Send error notification to webhook
+            const errorResult = {
               jsonrpc: "2.0",
               id: requestId,
               result: {
-                id: taskIdForBackground,
-                contextId: contextId || randomUUID(),
+                id: generatedTaskId,
+                contextId: generatedContextId,
                 status: {
-                  state: "processing",
+                  state: "failed",
                   timestamp: new Date().toISOString(),
-                  message: {
-                    messageId: randomUUID(),
-                    role: "agent",
-                    parts: [{ kind: "text", text: "Request timed out. Your request is being processed in background. You will receive the response via webhook." }],
-                    kind: "message",
+                  error: {
+                    code: -32603,
+                    message: "Agent execution failed",
+                    data: { details: error.message },
                   },
                 },
                 kind: "task",
               },
-            });
-          } else {
-            // No webhook fallback - return timeout error
-            return c.json(
-              {
-                jsonrpc: "2.0",
-                id: requestId,
-                error: {
-                  code: -32603,
-                  message: "Request timeout after 60 seconds. Try using webhooks for longer processing.",
-                  data: { details: "The request took too long to process. Consider using non-blocking mode with webhooks." },
-                },
-              },
-              408
+            };
+
+            await sendWebhookNotification(
+              webhookConfig.url,
+              errorResult,
+              webhookConfig.token,
+              webhookConfig.authentication?.schemes
             );
           }
-        }
+        })();
 
-        // Other errors
-        throw error;
+        return c.json(immediateResponse);
+      } else {
+        // Blocking mode: wait for completion
+        const response = await agent.generate(mastraMessages);
+        const agentText = response.text || "";
+
+        return c.json(buildResult(agentText, response.toolResults));
+
       }
+
+
+
     } catch (error: any) {
       return c.json(
         {
           jsonrpc: "2.0",
-          id: requestId || null,
+          id: null,
           error: {
             code: -32603,
             message: "Internal error",
