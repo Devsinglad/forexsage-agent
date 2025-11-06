@@ -173,62 +173,96 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         };
       };
 
-      // Process agent and wait for webhook completion if configured
-      if (webhookConfig?.url) {
-        // Process agent and wait for completion
-        try {
-          const response = await agent.generate(mastraMessages);
-          const agentText = response.text || "";
-
-          const finalResult = buildResult(agentText, response.toolResults);
-
-          // Send webhook notification and wait for it to complete
-          await sendWebhookNotification(
-            webhookConfig.url,
-            finalResult,
-            webhookConfig.token,
-            webhookConfig.authentication?.schemes
-          );
-
-          // Return the final result after webhook completes
-          return c.json(finalResult);
-        } catch (error: any) {
-          // Send error notification to webhook and wait for it to complete
-          const errorResult = {
-            jsonrpc: "2.0",
-            id: requestId,
-            result: {
-              id: generatedTaskId,
-              contextId: generatedContextId,
-              status: {
-                state: "failed",
-                timestamp: new Date().toISOString(),
-                error: {
-                  code: -32603,
-                  message: "Agent execution failed",
-                  data: { details: error.message },
-                },
-              },
-              kind: "task",
+      // Check if this is a blocking or non-blocking request
+      if (!isBlocking && webhookConfig?.url) {
+        // Non-blocking mode: return immediately and process in background
+        const immediateResponse = {
+          jsonrpc: "2.0",
+          id: requestId,
+          result: {
+            id: generatedTaskId,
+            contextId: generatedContextId,
+            status: {
+              state: "working",
+              timestamp: new Date().toISOString(),
             },
-          };
+            kind: "task",
+          },
+        };
 
-          await sendWebhookNotification(
-            webhookConfig.url,
-            errorResult,
-            webhookConfig.token,
-            webhookConfig.authentication?.schemes
-          );
+        // Process agent in background without waiting
+        (async () => {
+          try {
+            const response = await agent.generate(mastraMessages);
+            const agentText = response.text || "";
 
-          // Return the error result after webhook completes
-          return c.json(errorResult);
-        }
+            const finalResult = buildResult(agentText, response.toolResults);
+
+            // Send webhook notification
+            await sendWebhookNotification(
+              webhookConfig.url,
+              finalResult,
+              webhookConfig.token,
+              webhookConfig.authentication?.schemes
+            );
+          } catch (error: any) {
+            // Send error notification to webhook
+            const errorResult = {
+              jsonrpc: "2.0",
+              id: requestId,
+              result: {
+                id: generatedTaskId,
+                contextId: generatedContextId,
+                status: {
+                  state: "failed",
+                  timestamp: new Date().toISOString(),
+                  error: {
+                    code: -32603,
+                    message: "Agent execution failed",
+                    data: { details: error.message },
+                  },
+                },
+                kind: "task",
+              },
+            };
+
+            await sendWebhookNotification(
+              webhookConfig.url,
+              errorResult,
+              webhookConfig.token,
+              webhookConfig.authentication?.schemes
+            );
+          }
+        })();
+
+        // Return immediate response
+        return c.json(immediateResponse);
       } else {
-        // No webhook configured - just process agent normally
+        // Blocking mode: wait for completion
         const response = await agent.generate(mastraMessages);
         const agentText = response.text || "";
 
-        return c.json(buildResult(agentText, response.toolResults));
+        const finalResult = buildResult(agentText, response.toolResults);
+
+        // If webhook is configured, send notification but don't wait for it
+        if (webhookConfig?.url) {
+          // Send webhook notification in background without waiting
+          (async () => {
+            try {
+              await sendWebhookNotification(
+                webhookConfig.url,
+                finalResult,
+                webhookConfig.token,
+                webhookConfig.authentication?.schemes
+              );
+            } catch (error) {
+              console.error("Error sending webhook notification:", error);
+            }
+          })();
+        }
+
+        // Return the final result
+        return c.json(finalResult);
       }
 
 
