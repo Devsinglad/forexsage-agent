@@ -28,9 +28,138 @@ async function sendWebhookNotification(
 
     if (!response.ok) {
       console.error(`Webhook notification failed: ${response.statusText}`);
+      throw new Error(`Webhook failed with status: ${response.status}`);
     }
+
+    console.log("Webhook notification sent successfully");
+    return response;
   } catch (error) {
     console.error("Error sending webhook notification:", error);
+    throw error;
+  }
+}
+
+// Background job processor
+async function processAgentInBackground(
+  agent: any,
+  mastraMessages: any[],
+  webhookConfig: any,
+  requestId: string,
+  generatedTaskId: string,
+  generatedContextId: string,
+  messagesList: any[],
+  agentId: string
+) {
+  try {
+    console.log(`[Background Job ${generatedTaskId}] Starting agent processing`);
+
+    const response = await agent.generate(mastraMessages);
+    const agentText = response.text || "";
+
+    console.log(`[Background Job ${generatedTaskId}] Agent processing completed`);
+
+    // Build the final result
+    const artifacts: any = [
+      {
+        artifactId: randomUUID(),
+        name: `${agentId}Response`,
+        parts: [{ kind: "text", text: agentText }],
+      },
+    ];
+
+    if (response.toolResults && response.toolResults.length > 0) {
+      artifacts.push({
+        artifactId: randomUUID(),
+        name: "ToolResults",
+        parts: response.toolResults.map((result: any) => ({
+          kind: "data",
+          data: result,
+        })),
+      });
+    }
+
+    const history = [
+      ...messagesList.map((msg) => ({
+        kind: "message",
+        role: msg.role,
+        parts: msg.parts,
+        messageId: msg.messageId || randomUUID(),
+        taskId: msg.taskId || generatedTaskId,
+      })),
+      {
+        kind: "message",
+        role: "agent",
+        parts: [{ kind: "text", text: agentText }],
+        messageId: randomUUID(),
+        taskId: generatedTaskId,
+      },
+    ];
+
+    const finalResult = {
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        id: generatedTaskId,
+        contextId: generatedContextId,
+        status: {
+          state: "completed",
+          timestamp: new Date().toISOString(),
+          message: {
+            messageId: randomUUID(),
+            role: "agent",
+            parts: [{ kind: "text", text: agentText }],
+            kind: "message",
+          },
+        },
+        artifacts,
+        history,
+        kind: "task",
+      },
+    };
+
+    // Send webhook notification
+    await sendWebhookNotification(
+      webhookConfig.url,
+      finalResult,
+      webhookConfig.token,
+      webhookConfig.authentication?.schemes
+    );
+
+    console.log(`[Background Job ${generatedTaskId}] Webhook notification sent successfully`);
+  } catch (error: any) {
+    console.error(`[Background Job ${generatedTaskId}] Processing failed:`, error);
+
+    // Send error notification to webhook
+    const errorResult = {
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        id: generatedTaskId,
+        contextId: generatedContextId,
+        status: {
+          state: "failed",
+          timestamp: new Date().toISOString(),
+          error: {
+            code: -32603,
+            message: "Agent execution failed",
+            data: { details: error.message },
+          },
+        },
+        kind: "task",
+      },
+    };
+
+    try {
+      await sendWebhookNotification(
+        webhookConfig.url,
+        errorResult,
+        webhookConfig.token,
+        webhookConfig.authentication?.schemes
+      );
+      console.log(`[Background Job ${generatedTaskId}] Error notification sent to webhook`);
+    } catch (webhookError) {
+      console.error(`[Background Job ${generatedTaskId}] Failed to send error notification:`, webhookError);
+    }
   }
 }
 
@@ -175,6 +304,8 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
 
       // Non-blocking mode: return immediately and process in background
       if (!isBlocking && webhookConfig?.url) {
+        console.log(`[Task ${generatedTaskId}] Starting non-blocking mode processing`);
+
         // Return immediate "processing" response
         const immediateResponse = {
           jsonrpc: "2.0",
@@ -190,64 +321,36 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           },
         };
 
-        // Process agent in background
-        (async () => {
-          try {
-            const response = await agent.generate(mastraMessages);
-            const agentText = response.text || "";
-
-            const finalResult = buildResult(agentText, response.toolResults);
-
-            // Send webhook notification
-            await sendWebhookNotification(
-              webhookConfig.url,
-              finalResult,
-              webhookConfig.token,
-              webhookConfig.authentication?.schemes
-            );
-          } catch (error: any) {
-            // Send error notification to webhook
-            const errorResult = {
-              jsonrpc: "2.0",
-              id: requestId,
-              result: {
-                id: generatedTaskId,
-                contextId: generatedContextId,
-                status: {
-                  state: "failed",
-                  timestamp: new Date().toISOString(),
-                  error: {
-                    code: -32603,
-                    message: "Agent execution failed",
-                    data: { details: error.message },
-                  },
-                },
-                kind: "task",
-              },
-            };
-
-            await sendWebhookNotification(
-              webhookConfig.url,
-              errorResult,
-              webhookConfig.token,
-              webhookConfig.authentication?.schemes
-            );
-          }
-        })();
+        // Process agent in background with proper error handling
+        // Use Promise.resolve() to ensure we catch any synchronous errors
+        Promise.resolve()
+          .then(() => processAgentInBackground(
+            agent,
+            mastraMessages,
+            webhookConfig,
+            requestId,
+            generatedTaskId,
+            generatedContextId,
+            messagesList,
+            agentId
+          ))
+          .catch((error) => {
+            // This catches any errors that weren't handled in processAgentInBackground
+            console.error(`[Task ${generatedTaskId}] Unhandled background processing error:`, error);
+          });
 
         return c.json(immediateResponse);
       } else {
         // Blocking mode: wait for completion
+        console.log(`Task ${generatedTaskId}] Starting blocking mode processing`);
+
         const response = await agent.generate(mastraMessages);
         const agentText = response.text || "";
 
         return c.json(buildResult(agentText, response.toolResults));
-
       }
-
-
-
     } catch (error: any) {
+      console.error("Route handler error:", error);
       return c.json(
         {
           jsonrpc: "2.0",
