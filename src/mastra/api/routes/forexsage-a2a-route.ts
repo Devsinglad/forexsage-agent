@@ -77,13 +77,13 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
       }
 
       // Extract configuration
-      const { 
-        message, 
-        messages, 
-        contextId, 
-        taskId, 
+      const {
+        message,
+        messages,
+        contextId,
+        taskId,
         metadata,
-        configuration 
+        configuration
       } = params || {};
 
       const webhookConfig = configuration?.pushNotificationConfig;
@@ -195,9 +195,9 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           try {
             const response = await agent.generate(mastraMessages);
             const agentText = response.text || "";
-            
+
             const finalResult = buildResult(agentText, response.toolResults);
-            
+
             // Send webhook notification
             await sendWebhookNotification(
               webhookConfig.url,
@@ -225,7 +225,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
                 kind: "task",
               },
             };
-            
+
             await sendWebhookNotification(
               webhookConfig.url,
               errorResult,
@@ -235,14 +235,17 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           }
         })();
 
-        // return c.json(immediateResponse);
+        return c.json(immediateResponse);
+      } else {
+        // Blocking mode: wait for completion
+        const response = await agent.generate(mastraMessages);
+        const agentText = response.text || "";
+
+        return c.json(buildResult(agentText, response.toolResults));
+
       }
 
-      // Blocking mode: wait for completion
-      const response = await agent.generate(mastraMessages);
-      const agentText = response.text || "";
 
-      return c.json(buildResult(agentText, response.toolResults));
 
     } catch (error: any) {
       return c.json(
