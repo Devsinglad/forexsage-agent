@@ -12,6 +12,11 @@ import { completeForexAnalysisA2ARoute } from './api/routes/complete-forex-analy
 import { multiCurrencyComparisonA2ARoute } from './api/routes/multi-currency-comparison-a2a-route';
 import { dailyForexReportA2ARoute } from './api/routes/daily-forex-report-a2a-route';
 import { arbitrageOpportunityA2ARoute } from './api/routes/arbitrage-opportunity-a2a-route';
+import { webhookReceiverRoute, webhookHealthRoute } from './api/routes/webhook-receiver-route';
+import { TaskWorker } from './workers/task-worker';
+
+// Initialize the task worker
+const taskWorker = TaskWorker.getInstance();
 
 export const mastra = new Mastra({
   workflows: {
@@ -44,6 +49,8 @@ export const mastra = new Mastra({
       multiCurrencyComparisonA2ARoute,
       dailyForexReportA2ARoute,
       arbitrageOpportunityA2ARoute,
+      webhookReceiverRoute,
+      webhookHealthRoute,
     ]
   }
 });
