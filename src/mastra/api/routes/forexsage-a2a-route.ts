@@ -173,76 +173,62 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
         };
       };
 
-      // Non-blocking mode: return immediately and process in background
-      if (!isBlocking && webhookConfig?.url) {
-        // Return immediate "processing" response
-        const immediateResponse = {
-          jsonrpc: "2.0",
-          id: requestId,
-          result: {
-            id: generatedTaskId,
-            contextId: generatedContextId,
-            status: {
-              state: "working",
-              timestamp: new Date().toISOString(),
-            },
-            kind: "task",
-          },
-        };
+      // Process agent and wait for webhook completion if configured
+      if (webhookConfig?.url) {
+        // Process agent and wait for completion
+        try {
+          const response = await agent.generate(mastraMessages);
+          const agentText = response.text || "";
 
-        // Process agent in background
-        (async () => {
-          try {
-            const response = await agent.generate(mastraMessages);
-            const agentText = response.text || "";
+          const finalResult = buildResult(agentText, response.toolResults);
 
-            const finalResult = buildResult(agentText, response.toolResults);
+          // Send webhook notification and wait for it to complete
+          await sendWebhookNotification(
+            webhookConfig.url,
+            finalResult,
+            webhookConfig.token,
+            webhookConfig.authentication?.schemes
+          );
 
-            // Send webhook notification
-            await sendWebhookNotification(
-              webhookConfig.url,
-              finalResult,
-              webhookConfig.token,
-              webhookConfig.authentication?.schemes
-            );
-          } catch (error: any) {
-            // Send error notification to webhook
-            const errorResult = {
-              jsonrpc: "2.0",
-              id: requestId,
-              result: {
-                id: generatedTaskId,
-                contextId: generatedContextId,
-                status: {
-                  state: "failed",
-                  timestamp: new Date().toISOString(),
-                  error: {
-                    code: -32603,
-                    message: "Agent execution failed",
-                    data: { details: error.message },
-                  },
+          // Return the final result after webhook completes
+          return c.json(finalResult);
+        } catch (error: any) {
+          // Send error notification to webhook and wait for it to complete
+          const errorResult = {
+            jsonrpc: "2.0",
+            id: requestId,
+            result: {
+              id: generatedTaskId,
+              contextId: generatedContextId,
+              status: {
+                state: "failed",
+                timestamp: new Date().toISOString(),
+                error: {
+                  code: -32603,
+                  message: "Agent execution failed",
+                  data: { details: error.message },
                 },
-                kind: "task",
               },
-            };
+              kind: "task",
+            },
+          };
 
-            await sendWebhookNotification(
-              webhookConfig.url,
-              errorResult,
-              webhookConfig.token,
-              webhookConfig.authentication?.schemes
-            );
-          }
-        })();
+          await sendWebhookNotification(
+            webhookConfig.url,
+            errorResult,
+            webhookConfig.token,
+            webhookConfig.authentication?.schemes
+          );
 
-        return c.json(immediateResponse);
+          // Return the error result after webhook completes
+          return c.json(errorResult);
+        }
       } else {
-        // Blocking mode: wait for completion
+        // No webhook configured - just process agent normally
         const response = await agent.generate(mastraMessages);
         const agentText = response.text || "";
 
         return c.json(buildResult(agentText, response.toolResults));
-
       }
 
 
