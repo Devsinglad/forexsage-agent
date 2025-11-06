@@ -11,6 +11,8 @@ async function sendWebhookNotification(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  console.log("Sending webhook notification to:", webhookUrl);
+  console.log("Notification payload:", JSON.stringify(result, null, 2));
 
   // Add authentication if provided
   if (token && authSchemes?.includes("Bearer")) {
@@ -233,7 +235,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           }
         })();
 
-        return c.json(immediateResponse);
+        // return c.json(immediateResponse);
       }
 
       // Blocking mode: wait for completion
