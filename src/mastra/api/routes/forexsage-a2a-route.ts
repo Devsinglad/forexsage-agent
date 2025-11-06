@@ -157,7 +157,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
             id: generatedTaskId,
             contextId: generatedContextId,
             status: {
-              state: "completed",
+              state: "working",
               timestamp: new Date().toISOString(),
               message: {
                 messageId: randomUUID(),
@@ -235,7 +235,7 @@ export const a2aAgentRoute = registerApiRoute("/a2a/agent/:agentId", {
           }
         })();
 
-        // return c.json(immediateResponse);
+        return c.json(immediateResponse);
       } else {
         // Blocking mode: wait for completion
         const response = await agent.generate(mastraMessages);
